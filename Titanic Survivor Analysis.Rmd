@@ -1,0 +1,340 @@
+---
+title: "Titanic Dataset"
+author: "Taylor Stell"
+date: "2025-12-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+###################################################################
+###################################################################
+##                                                               ##
+## TITANIC SURVIVAL ANALYSIS                                     ##
+##                                                               ##
+###################################################################
+###################################################################
+
+## Goal:
+##  Use statistical and machine learning tools to analyze survival patterns
+##  in the Titanic passenger data and evaluate the historical claims surrounding
+##  evacuation priority and class-based survival.
+
+
+## Primary Questions:
+##  Is there evidence of a "women and children first" policy?
+##  What demographics were more likely to survive?
+##  What demographics were more likely to perish?
+##  Do the results support portrayals in the movie Titanic (1997)?
+##  What are example survival probabilities for Rose and Jack?
+
+#########################
+##
+## The Data
+##
+#########################
+
+# Source: Titanic dataset (British Board of Trade)
+
+data <- read.csv("Titanic-Dataset.csv")
+
+str(data)
+summary(data)
+
+# Variables:
+# PassengerId  -  Row identifier, not used for analysis
+# Survived  -  Response variable, binary outcome (0 = No, 1 = Yes), convert to factor
+# Pclass  -  Passenger's ticket class, convert to factor
+# Name  -  Passenger names, Not used for analysis
+# Sex  -  Male/Female, convert to factor
+# Age  -  Numeric (Many missing values), break into age groups, possibly fill missing data
+# SibSp  -  Number of siblings/spouses aboard
+# Parch  -  Number of parents/children aboard (SibSp + Parch = Family Size)
+# Ticket  -  Ticket number, not used for analysis
+# Fare   -  Amount paid for ticket, Highly right-skewed, Log transform
+# Cabin  -  Cabin location, mostly missing data, possibly extract deck letter
+# Embarked  -  Port of embarkation (S = Southampton, C = Cherbourg, Q = Queenstown), convert to factor
+
+
+# Remove the data I will not be using
+data$PassengerId <- NULL
+data$Ticket <- NULL
+data$Name <- NULL
+
+
+# Convert outcome and key predictors to factors
+data$Survived <- factor(
+  data$Survived,
+  levels = c(0, 1),
+  labels = c("No", "Yes")
+)
+
+data$Sex <- factor(data$Sex)
+
+data$Pclass <- factor(
+  data$Pclass,
+  levels = c(1, 2, 3),
+  labels = c("1st", "2nd", "3rd")
+)
+
+data$Embarked <- factor(data$Embarked)
+
+
+# Remove missing Embarked values
+data$Embarked[data$Embarked == "" | is.na(data$Embarked)] <- "S"
+data$Embarked <- factor(data$Embarked)
+
+
+# Impute missing Age values
+data$Age[is.na(data$Age)] <- median(data$Age, na.rm = TRUE)
+
+
+# Create a child indicator for < 16
+data$Child <- ifelse(data$Age < 16, "Child", "Adult")
+data$Child <- factor(data$Child)
+
+
+# Combine SibSp and Parch for family size
+data$FamilySize <- data$SibSp + data$Parch + 1
+
+
+# Convert from num to integer
+data$FamilySize <- as.integer(data$FamilySize)
+
+
+# Log transform fare to fix the skew
+data$Fare_log <- log(data$Fare + 1)
+
+
+# Known cabin indicator, captures "had access to cabins near deck" vs not.
+data$CabinKnown <- ifelse(data$Cabin == "", "No", "Yes")
+data$CabinKnown <- factor(data$CabinKnown)
+
+data$Cabin <- NULL
+
+str(data)
+summary(data)
+
+
+###############################
+##
+## Exploratory Data Analysis
+##
+###############################
+
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+# Let's get a look at the data, in terms of survival
+ggplot(data, aes(x = Survived)) +
+  geom_bar() +
+  labs(title = "Overall Survival on the Titanic", x = NULL, y = "Count")
+
+ggplot(data, aes(x = Sex, fill = Survived)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Survival Rate by Sex", x = NULL, y = "Proportion")
+# Sex is strongly associated with survival
+
+ggplot(data, aes(x = Pclass, fill = Survived)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Survival Rate by Passenger Class", x = NULL, y = "Proportion")
+# Class also seems to be associated with survival, though survival is not evenly distributed across classes.
+
+ggplot(data, aes(x = Pclass, fill = Survived)) +
+  geom_bar(position = "fill") +
+  facet_wrap(~ Sex) +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Survival by Class and Sex", x = NULL, y = "Proportion")
+# Here is an interesting breakdown.  There is a sudden drop in survival rates of women once you hit 3rd class,
+# bringing their chance of survival to almost half that of their higher class shipmates.
+
+ggplot(data, aes(x = Child, fill = Survived)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = percent) +
+  labs(title = "Survival by Child vs Adult", x = NULL, y = "Proportion")
+# There is a noticibly higher survival rate for children, but both are still distressingly low.
+
+ggplot(data, aes(x = Age, fill = Survived)) +
+  geom_density(alpha = 0.35) +
+  labs(title = "Age Distribution by Survival", x = "Age", y = "Density")
+# The age distribution of survivors and non-survivors largely overlap, however, survivors tend to skew younger.
+# There is a noticeable rise in non-survivors for passengers in their 20's, and seniors over 65.
+
+ggplot(data, aes(x = Fare_log, fill = Survived)) +
+  geom_density(alpha = 0.35) +
+  labs(title = "Fare (log) Distribution by Survival", x = "log(Fare + 1)", y = "Density")
+# Passengers who survived generally paid higher fares than those who did not. Even after log transformation,
+# the fare distribution for survivors is shifted towards higher values.
+
+
+############################
+##
+## Hypothesis Testing
+##
+############################
+
+##
+## Chi-square tests of independence
+#####################################
+
+chisq.test(table(data$Survived, data$Sex))
+prop.table(table(data$Survived, data$Sex), margin = 2)
+# There is overwhelming statistical evidence that survival was associated with sex. Women were significantly
+# more likely to survive than men.
+
+chisq.test(table(data$Survived, data$Child))
+prop.table(table(data$Survived, data$Child), margin = 2)
+# Survival is significantly associated with child status. Children were more likely to survive than adults,
+# although the magnitude of this association is smaller than that observed for sex.
+
+chisq.test(table(data$Survived, data$Pclass))
+prop.table(table(data$Survived, data$Pclass), margin = 2)
+# Passenger class is strongly associated with survival. First-class passengers were significantly more likely
+# to survive than second-class passengers, who in turn were more likely to survive than third-class passengers.
+
+
+##
+## Chi-square Summary
+######################
+
+# Chi-square tests of independence indicate that survival on the Titanic was strongly associated with sex,
+# child status, and passenger class. Women were significantly more likely to survive than men (χ² = 260.7, p < 0.001),
+# providing strong evidence consistent with a women-first evacuation policy. Children also exhibited higher
+# survival rates than adults (χ² = 15.6, p < 0.001), though this effect was more modest. Passenger class showed
+# a pronounced survival gradient, with first-class passengers most likely to survive and third-class passengers
+# least likely (χ² = 102.9, p < 0.001).
+# However, these univariate associations do not account for confounding between variables, motivating a multivariate analysis.
+
+############################
+##
+## Logistic Regression
+##
+############################
+
+
+##
+## Baseline multivariate model
+###############################
+
+model1 <- glm(
+  Survived ~ Sex + Child + Pclass,
+  data = data,
+  family = binomial
+)
+summary(model1)
+# First-class adult women served as the reference group, with all coefficients interpreted relative to this baseline.
+# Holding age group and passenger class constant, women were substantially more likely to survive than men.
+# Children also had higher odds of survival. Survival probability declined sharply with passenger class,
+# with third-class passengers experiencing the lowest odds of survival.
+
+
+##
+## Structural Access model
+###########################
+
+model2 <- glm(
+  Survived ~ Sex + Child + Pclass + Fare_log + CabinKnown + FamilySize,
+  data = data,
+  family = binomial
+)
+summary(model2)
+# After controlling for fare, cabin access, and family size, the direct effect of passenger class is substantially reduced.
+# This suggests that class-based survival differences operated largely through unequal access to resources rather than class alone.
+
+
+##
+## Interaction model
+######################
+
+model3 <- glm(
+  Survived ~ Sex * Pclass + Child + Fare_log,
+  data = data,
+  family = binomial
+)
+summary(model3)
+# This third model tests whether the survival advantage for women differed by passenger class.
+# The coefficient for Pclass2nd is negative but not statistically significant (-1.11),
+# indicating no clear difference in survival odds between first- and second-class women.
+# In contrast, the coefficient for Pclass3rd is large and negative (-3.73), indicating that third-class women
+# had substantially lower odds of survival compared to first-class women.
+# While the interaction model quantifies how survival probabilities vary across sex and passenger class,
+# these relationships can be difficult to interpret directly from regression coefficients,
+# motivating the use of a tree-based model to visualize decision rules and interactions.
+
+
+########################
+##
+## Tree-Based Models
+##
+########################
+
+##
+## Fit A CART Model
+######################
+
+
+library(rpart)
+library(rpart.plot)
+
+cart_model <- rpart(
+  Survived ~ Sex + Pclass + Child + Fare_log,
+  data = data,
+  method = "class"
+)
+
+rpart.plot(cart_model)
+# The classification tree identifies sex as the primary determinant of survival, with male passengers exhibiting
+# a low overall probability of survival. Among men, fare further differentiates survival outcomes, indicating that
+# access and resources influenced survival even within this group. Female passengers show a substantially higher
+# survival probability overall, however, passenger class further stratifies outcomes among women, with third-class women
+# experiencing reduced survival rates. Child status refines survival probabilities after sex and class are already accounted for.
+# This tree structure visually reinforces the interaction between sex and passenger class observed in the logistic regression analysis.
+
+#################
+##
+## Conclusion
+##
+#################
+
+# This analysis examined survival patterns aboard the Titanic using exploratory data analysis, hypothesis testing,
+# logistic regression, and a classification tree. Across all methods, survival was found to be strongly associated
+# with sex, passenger class, and child status. Univariate chi-square tests provided clear evidence consistent with
+# a “women and children first” evacuation policy, however, multivariate modeling revealed that this policy was not
+# applied uniformly across social classes.
+
+# Logistic regression results showed that women and children had substantially higher odds of survival, while
+# third-class passengers experienced dramatically reduced survival odds. Importantly, an interaction between sex and
+# passenger class indicated that the survival advantage for women diminished significantly in third class. Models that
+# incorporated fare, cabin access, and family size further suggested that class-based differences in survival operated
+# largely through unequal access to resources rather than class alone.
+
+# The classification tree complemented these findings by providing an intuitive, rule-based representation of survival outcomes.
+# The tree identified sex as the primary determinant of survival, followed by passenger class and access-related variables,
+# with child status further refining survival probabilities within these groups. The structure of the tree visually reinforced
+# the interaction observed in the logistic regression, highlighting how structural barriers constrained the effectiveness of
+# evacuation priorities.
+
+# To explore the survival probabilities of the fictional characters Jack and Rose from the film Titanic (1997),
+# their outcomes can be traced by following their respective paths through the classification tree.
+# Starting with Jack, restricting the data to male passengers yields an observed survival rate of approximately 19%.
+# Further restricting to men with low fares—characteristic of third-class access—reduces the observed survival rate
+# to roughly 13%. Finally, conditioning on adult status places Jack in a terminal node with an estimated survival
+# probability of approximately 10%.
+
+# In contrast, following Rose’s path through the tree yields substantially different results. Restricting the data
+# to female passengers corresponds to an observed survival rate of approximately 74%. Further restricting to women
+# who were not traveling in third class places Rose in a terminal node with an estimated survival probability of 95%.
+
+# These outcomes closely align with the events depicted in the film: Rose survives, while Jack does not.
+# The empirical survival patterns captured by the classification tree indicate that third-class adult men were among
+# the least likely to survive, whereas first-class women were among the most likely.
+
+
+```
+
